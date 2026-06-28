@@ -1,0 +1,22 @@
+/* app.wxss - 全局样式，统一出口 */
+page {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: #edeff0;
+  color: #262626;
+  height: 100%;
+  overflow: hidden;
+}
+
+page.dark-mode {
+  background-color: #111111;
+  color: #e8edf4;
+}
+
+/* 让 index.wxml 根 view 撑满屏幕 */
+.container {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

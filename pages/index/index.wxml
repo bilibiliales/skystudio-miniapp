@@ -1,0 +1,242 @@
+<view class="page {{isDarkMode ? 'page_dark' : ''}}">
+
+  <!--顶部导航栏-->
+  <view class="nav-bar">
+    <view class="nav-left" bindtap="onToggleSidebar">
+      <text class="nav-icon-text">☰</text>
+    </view>
+    <view class="nav-center">
+      <text class="nav-title">Sky Studio 解密</text>
+    </view>
+    <view class="nav-right">
+      <!--白天/黑夜图标 + switch-->
+      <image wx:if="{{!isDarkMode}}" src="/images/sunny.svg" class="theme-icon adaptive-icon"/>
+      <image wx:else src="/images/moon.svg" class="theme-icon adaptive-icon"/>
+      <switch class="theme-switch" checked="{{isDarkMode}}" bindchange="onThemeChange" color="#07C160"/>
+    </view>
+  </view>
+
+  <!--侧边栏遮罩 - 点击关闭（无滑动手势）-->
+  <view class="sidebar-mask {{showSidebar ? 'show' : ''}}"
+        bindtap="onCloseSidebar"
+        wx:if="{{showSidebar}}"></view>
+
+  <!--侧边栏 - 只保留点击交互-->
+  <view class="sidebar {{showSidebar ? 'show' : ''}}">
+
+    <!--上传按钮-->
+    <view class="sidebar-header">
+      <view class="sidebar-upload-btn" bindtap="onChooseFile">
+        <image src="/images/upload.svg" class="sidebar-header-icon adaptive-icon"/>
+        <text class="sidebar-header-text">上传 Sky Studio 工程文件（.txt）</text>
+      </view>
+    </view>
+
+    <!--批量操作工具栏-->
+    <view class="batch-toolbar" wx:if="{{projectFiles.length > 0}}">
+      <view class="batch-btn" bindtap="onToggleSelect">
+        <text>{{allSelected ? '取消全选' : '全选'}}</text>
+      </view>
+      <view class="batch-btn" bindtap="onBatchDownloadIndividual">
+        <image src="/images/zip.svg" class="batch-icon adaptive-icon"/>
+        <text>打包下载</text>
+      </view>
+      <view class="batch-btn" bindtap="onClearList">
+        <image src="/images/delete.svg" class="batch-icon adaptive-icon"/>
+        <text>清空</text>
+      </view>
+    </view>
+
+    <!--文件列表（可滚动）-->
+    <scroll-view class="file-list-scroll" scroll-y enhanced show-scrollbar="{{false}}">
+      <view class="file-count-tip" wx:if="{{projectFiles.length > 0}}">
+        已上传 {{projectFiles.length}} 个文件，已选 {{selectedCount}} 个
+      </view>
+
+      <view wx:for="{{projectFiles}}" wx:key="id"
+            class="file-item {{item.id === activeProjectId ? 'file-item_active' : ''}} {{item.selected ? 'file-item_selected' : ''}}"
+            bindtap="onActivateProject" data-id="{{item.id}}"
+            catchlongpress="onFileLongPress" data-id="{{item.id}}">
+
+        <!--左侧：勾选框-->
+        <view class="file-item-check" catchtap="onToggleFileSelect" data-id="{{item.id}}">
+          <view class="checkbox-custom {{item.selected ? 'checkbox-checked' : ''}}">
+            <text wx:if="{{item.selected}}" class="checkmark">✓</text>
+          </view>
+        </view>
+
+        <!--中间：文件信息（加音乐SVG图标）-->
+        <view class="file-item-info">
+          <view class="file-item-name-row">
+            <image src="/images/music.svg" class="file-item-music-icon adaptive-icon"/>
+            <text class="file-item-name">{{item.meta.valid ? item.meta.name : item.fileName}}</text>
+          </view>
+          <text class="file-item-desc" wx:if="{{item.meta.valid}}">
+            {{item.meta.author}} · BPM {{item.meta.bpm}} · {{item.meta.noteCount}}音
+          </text>
+          <text class="file-item-desc file-item-error" wx:else>识别失败：{{item.meta.error}}</text>
+        </view>
+
+        <!--右侧：删除-->
+        <view class="file-item-delete" catchtap="onDeleteProject" data-id="{{item.id}}">
+          <image src="/images/delete.svg" class="delete-icon adaptive-icon"/>
+        </view>
+      </view>
+
+      <!--空状态-->
+      <view wx:if="{{projectFiles.length === 0}}" class="empty-state">
+        <image src="/images/music.svg" class="empty-icon adaptive-icon"/>
+        <text class="empty-text">暂无文件</text>
+        <text class="empty-hint">点击上方按钮上传 .txt 文件</text>
+      </view>
+    </scroll-view>
+
+  </view>
+
+  <!--主内容区-->
+  <view class="main-content">
+
+    <!--欢迎界面-->
+    <view class="welcome" wx:if="{{!activeProject}}">
+      <view class="welcome-icon-wrap">
+        <image src="/images/music.svg" class="welcome-icon adaptive-icon"/>
+      </view>
+      <text class="welcome-title">Sky Studio 解密工具</text>
+      <text class="welcome-desc">上传 Sky Studio 工程文件（.txt）\n即可自动解密并生成演奏代码</text>
+      <button class="weui-btn weui-btn_primary welcome-btn" bindtap="onToggleSidebar">添加乐谱文件</button>
+    </view>
+
+    <!--项目详情界面-->
+    <view wx:elif="{{activeProject && activeProject.meta.valid}}" class="detail-wrap">
+
+      <!--乐谱信息卡片 - 标题旁换SVG-->
+      <view class="card">
+        <view class="card-head">
+          <view class="card-title-row">
+            <image src="/images/music.svg" class="card-title-icon adaptive-icon"/>
+            <text class="card-title">{{activeProject.meta.name}}</text>
+          </view>
+          <text class="card-action" bindtap="onToggleCode">{{showCode ? '收起代码 ▲' : '查看代码 ▼'}}</text>
+        </view>
+
+        <view class="card-body">
+          <view class="info-row">
+            <text class="info-label">名称</text>
+            <input class="info-input" value="{{activeProject.meta.name}}"
+                   bindinput="onSongInfoInput" data-field="name" placeholder="请输入名称"/>
+          </view>
+          <view class="info-row">
+            <text class="info-label">作者</text>
+            <input class="info-input" value="{{activeProject.meta.author}}"
+                   bindinput="onSongInfoInput" data-field="author" placeholder="请输入作者"/>
+          </view>
+          <view class="info-row">
+            <text class="info-label">BPM</text>
+            <input class="info-input" type="number" value="{{activeProject.meta.bpm}}"
+                   bindinput="onSongInfoInput" data-field="bpm" placeholder="节拍速度"/>
+          </view>
+          <view class="info-row">
+            <text class="info-label">改编者</text>
+            <input class="info-input" value="{{activeProject.meta.transcribedBy}}"
+                   bindinput="onSongInfoInput" data-field="transcribedBy" placeholder="请输入改编者"/>
+          </view>
+        </view>
+      </view>
+
+      <!--播放控制卡片-->
+      <view class="card" wx:if="{{activeProject.notesData && activeProject.notesData.length > 0}}">
+        <view class="card-head">
+          <text class="card-title">▶ 播放控制</text>
+        </view>
+
+        <view class="card-body">
+          <!--进度条-->
+          <view class="progress-row">
+            <progress class="play-progress" percent="{{playProgress}}"
+                      activeColor="#07C160" stroke-width="4"/>
+            <text class="progress-label">{{playProgress}}%</text>
+          </view>
+
+          <!--播放/暂停/停止 - 加SVG图标-->
+          <view class="control-row">
+            <view class="ctrl-btn" bindtap="onTogglePlay">
+              <image src="/images/{{isPaused ? 'play' : (isPlaying ? 'pause' : 'play')}}.svg" class="ctrl-icon adaptive-icon"/>
+              <text class="ctrl-text">{{isPaused ? '继续' : (isPlaying ? '暂停' : '播放')}}</text>
+            </view>
+            <view class="ctrl-btn" bindtap="onStop">
+              <image src="/images/stop.svg" class="ctrl-icon adaptive-icon"/>
+              <text class="ctrl-text">停止</text>
+            </view>
+          </view>
+
+          <!--倍速-->
+          <view class="speed-row">
+            <image src="/images/right-double.svg" class="ctrl-icon adaptive-icon"/>
+            <text class="speed-label">倍速</text>
+            <slider class="speed-slider"
+                    min="0.25" max="3" step="0.25"
+                    value="{{currentSpeed}}"
+                    bindchange="onSpeedChange"
+                    activeColor="#07C160" block-size="20"/>
+            <text class="speed-value">{{currentSpeed}}x</text>
+          </view>
+
+          <!--音符计数器-->
+          <text class="note-counter">播放进度：{{currentNoteIndex}} / {{activeProject.notesData.length}}</text>
+        </view>
+      </view>
+
+      <!--操作按钮 - 加SVG图标-->
+      <view class="action-row" wx:if="{{activeProject.generatedCode}}">
+        <button class="weui-btn weui-btn_default action-btn" bindtap="onCopyCode">
+          <image src="/images/copy.svg" class="action-icon adaptive-icon"/> 复制代码
+        </button>
+        <button class="weui-btn weui-btn_default action-btn" bindtap="onBatchDownloadIndividual">
+          <image src="/images/zip.svg" class="action-icon adaptive-icon"/> 打包下载
+        </button>
+        <button class="weui-btn weui-btn_primary action-btn" bindtap="onExportImage">
+          <image src="/images/image.svg" class="action-icon adaptive-icon"/> 导出图片
+        </button>
+      </view>
+
+      <!--代码预览 - 可折叠 + 滚动-->
+      <view wx:if="{{showCode && activeProject.generatedCode}}" class="card code-card">
+        <view class="card-body code-body">
+          <scroll-view class="code-scroll" scroll-y enhanced show-scrollbar="{{true}}">
+            <text class="code-text" user-select>{{activeProject.generatedCode}}</text>
+          </scroll-view>
+        </view>
+      </view>
+
+    </view>
+
+    <!--错误界面-->
+    <view class="error-page" wx:else>
+      <text class="error-icon">❌</text>
+      <text class="error-title">文件识别失败</text>
+      <text class="error-desc">{{activeProject.meta.error}}</text>
+    </view>
+
+  </view>
+
+  <!--底部安全区-->
+  <view class="safe-bottom"></view>
+
+  <!--Canvas（隐藏）-->
+  <canvas canvas-id="notationCanvas" class="hidden-canvas"></canvas>
+  
+  <!-- 自定义Dialog：ZIP文件已生成 -->
+  <view class="weui-mask" wx:if="{{showZipDialog}}" bindtap="onCloseZipDialog"></view>
+  <view class="weui-dialog" wx:if="{{showZipDialog}}">
+    <view class="weui-dialog__hd">
+      <view class="weui-dialog__title">ZIP文件已生成</view>
+    </view>
+    <view class="weui-dialog__bd">
+      <text>文件已保存到本地：\n{{zipFileName}}\n\n可选择以下操作：</text>
+    </view>
+    <view class="weui-dialog__ft">
+      <view class="weui-dialog__btn weui-dialog__btn_default" bindtap="onCloseZipDialog">关闭</view>
+      <view class="weui-dialog__btn weui-dialog__btn_primary" bindtap="onShareZipFile">分享到聊天</view>
+    </view>
+  </view>
+</view>

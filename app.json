@@ -1,0 +1,13 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "Sky Studio解密工具",
+    "navigationBarBackgroundColor": "#07c160",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#E0E0E0"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}
