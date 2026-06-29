@@ -1282,20 +1282,6 @@ Page({
     var fname = this.data.zipFileName
     var self = this
 
-    // 检测是否在模拟器环境（模拟器不支持大文件分享）
-    var isDevTool = typeof __wxConfig !== 'undefined'
-
-    if (isDevTool) {
-      wx.showModal({
-        title: '提示',
-        content: '模拟器不支持分享大文件，请在真机上测试。',
-        showCancel: false
-      })
-      return
-    }
-
-    // 真机环境
-    
     // 先关闭Dialog，再分享（避免遮挡）
     self.setData({ showZipDialog: false })
     
