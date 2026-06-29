@@ -352,6 +352,224 @@ function buildCode(songData, paizi, timingModel, unit) {
   return lines.join('\n')
 }
 
+function safeFileName(value, fallback) {
+  var name = String(value || fallback || 'skystudio_project').trim()
+  return (name || 'skystudio_project').replace(/[\\/:*?"<>|]/g, '_')
+}
+
+function stripTxtExtension(fileName) {
+  return String(fileName || 'project').replace(/\.txt$/i, '')
+}
+
+function ensureTxtExtension(fileName) {
+  return /\.txt$/i.test(fileName) ? fileName : fileName + '.txt'
+}
+
+function updateProjectContentMeta(content, meta) {
+  var dataArray = JSON.parse(content)
+  if (!Array.isArray(dataArray) || dataArray.length === 0 || !dataArray[0] || typeof dataArray[0] !== 'object') {
+    throw new Error('invalid project content')
+  }
+
+  var songData = dataArray[0]
+  songData.name = meta && meta.name ? meta.name : (songData.name || 'unknown')
+  songData.author = meta && meta.author ? meta.author : (songData.author || 'unknown')
+  songData.bpm = meta && meta.bpm ? Number(meta.bpm) : (songData.bpm || 120)
+  songData.transcribedBy = meta && meta.transcribedBy ? meta.transcribedBy : (songData.transcribedBy || 'unknown')
+  songData.isEncrypted = false
+
+  return JSON.stringify(dataArray)
+}
+
+function getSourceFileName(proj) {
+  if (!proj) return 'project.txt'
+  if (!proj.sourceIsEncrypted) {
+    return ensureTxtExtension(safeFileName(proj.fileName || 'project.txt', 'project.txt'))
+  }
+  return safeFileName(stripTxtExtension(proj.fileName || (proj.meta && proj.meta.name) || 'project'), 'project') + '_decrypted.txt'
+}
+
+function getSourceProjectContent(proj) {
+  if (!proj) throw new Error('no project')
+
+  var content = ''
+  if (!proj.sourceIsEncrypted) {
+    content = proj.content || ''
+  } else {
+    content = proj.decryptedSourceContent || ''
+    if (!content) {
+      content = decryptContent(proj.content, null)
+      proj.decryptedSourceContent = content
+    }
+  }
+
+  return updateProjectContentMeta(content, proj.meta || {})
+}
+
+function measureCanvasText(ctx, text, fontSize) {
+  if (ctx && ctx.measureText) {
+    try {
+      var metrics = ctx.measureText(String(text || ''))
+      if (metrics && typeof metrics.width === 'number') return metrics.width
+    } catch(e) {}
+  }
+  return String(text || '').length * (fontSize || 16) * 0.58
+}
+
+function setCanvasText(ctx, fontSize, align, baseline) {
+  ctx.setFontSize(fontSize)
+  if (ctx.setTextAlign) ctx.setTextAlign(align || 'left')
+  if (ctx.setTextBaseline) ctx.setTextBaseline(baseline || 'alphabetic')
+}
+
+function drawFittedCanvasText(ctx, text, x, y, maxWidth, align, fontSize) {
+  setCanvasText(ctx, fontSize || 16, align || 'center', 'middle')
+  var output = String(text || '')
+  while (output.length > 1 && measureCanvasText(ctx, output, fontSize) > maxWidth) {
+    output = output.slice(0, Math.max(1, output.length - 4)) + '...'
+  }
+  ctx.fillText(output, x, y)
+}
+
+function drawNotationCanvasNote(ctx, keyName, x, y, fontSize) {
+  var parts = getNumberedNotationParts(keyName)
+  setCanvasText(ctx, fontSize, 'center', 'middle')
+  ctx.fillText(parts.digit, x, y)
+
+  if (parts.dots > 0) {
+    var dotRadius = Math.max(1.6, fontSize * 0.085)
+    var firstDotY = y - (fontSize * 0.62)
+    ctx.beginPath()
+    ctx.arc(x, firstDotY, dotRadius, 0, Math.PI * 2)
+    ctx.fill()
+
+    if (parts.dots > 1) {
+      ctx.beginPath()
+      ctx.arc(x, firstDotY - (fontSize * 0.32), dotRadius, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+}
+
+function drawNotationCanvasEvent(ctx, event, x, y) {
+  var noteInfos = event.noteInfos || []
+  var fontSize = noteInfos.length > 3 ? 19 : 25
+  var lineGap = noteInfos.length > 3 ? 28 : 40
+
+  for (var i = 0; i < noteInfos.length; i++) {
+    var offset = (i - ((noteInfos.length - 1) / 2)) * lineGap
+    drawNotationCanvasNote(ctx, noteInfos[i].key, x, y + offset, fontSize)
+  }
+}
+
+function drawNotationCanvasMeasure(ctx, measure, measureX, centerY, measureWidth) {
+  var beatWidth = measureWidth / NOTATION_BEATS_PER_MEASURE
+
+  for (var beatIndex = 0; beatIndex < measure.length; beatIndex++) {
+    var beatEvents = measure[beatIndex]
+    var beatCenterX = measureX + ((beatIndex + 0.5) * beatWidth)
+    if (!beatEvents || beatEvents.length === 0) {
+      setCanvasText(ctx, 24, 'center', 'middle')
+      ctx.fillText('0', beatCenterX, centerY)
+      continue
+    }
+
+    var eventSpacing = Math.min(14, beatWidth / Math.max(2, beatEvents.length))
+    for (var i = 0; i < beatEvents.length; i++) {
+      var x = beatCenterX + (i - ((beatEvents.length - 1) / 2)) * eventSpacing
+      drawNotationCanvasEvent(ctx, beatEvents[i], x, centerY)
+    }
+  }
+}
+
+function getNotationImageLayout(item) {
+  var bpm = item && item.bpm ? item.bpm : ((item && item.meta && item.meta.bpm) || 120)
+  var measures = buildNotationMeasures((item && item.notesData) || [], bpm)
+  var lineCount = Math.max(1, Math.ceil(measures.length / NOTATION_MEASURES_PER_LINE))
+  var layout = {
+    bpm: bpm,
+    measures: measures,
+    lineCount: lineCount,
+    measureWidth: 168,
+    left: 86,
+    right: 46,
+    headerHeight: 118,
+    staffHeight: 128,
+    lineGap: 86,
+    footer: 52
+  }
+  layout.lineHeight = layout.staffHeight + layout.lineGap
+  layout.width = layout.left + (layout.measureWidth * NOTATION_MEASURES_PER_LINE) + layout.right
+  layout.height = layout.headerHeight + (layout.lineHeight * layout.lineCount) + layout.footer
+  return layout
+}
+
+function drawNotationImage(ctx, item, layout) {
+  var width = layout.width
+  var height = layout.height
+
+  ctx.setFillStyle('#ffffff')
+  ctx.fillRect(0, 0, width, height)
+  ctx.setFillStyle('#111111')
+  ctx.setStrokeStyle('#111111')
+
+  drawFittedCanvasText(ctx, (item && item.meta && item.meta.name) || (item && item.fileName) || '未命名乐谱', width / 2, 28, width - 80, 'center', 28)
+
+  setCanvasText(ctx, 16, 'left', 'middle')
+  ctx.fillText('1=C   4/4   BPM=' + layout.bpm, layout.left, 64)
+
+  for (var lineStart = 0; lineStart < layout.measures.length; lineStart += NOTATION_MEASURES_PER_LINE) {
+    var lineIndex = Math.floor(lineStart / NOTATION_MEASURES_PER_LINE)
+    var centerY = layout.headerHeight + (lineIndex * layout.lineHeight) + (layout.staffHeight / 2)
+    var barTop = centerY - (layout.staffHeight / 2)
+    var barBottom = centerY + (layout.staffHeight / 2)
+    var staffX = layout.left
+
+    setCanvasText(ctx, 14, 'left', 'middle')
+    ctx.fillText('(' + (lineStart + 1) + ')', 18, centerY - 46)
+
+    setCanvasText(ctx, 96, 'center', 'middle')
+    ctx.fillText('{', 56, centerY + 2)
+
+    for (var measureOffset = 0; measureOffset < NOTATION_MEASURES_PER_LINE; measureOffset++) {
+      var measure = layout.measures[lineStart + measureOffset]
+      if (!measure) continue
+
+      var measureX = staffX + (measureOffset * layout.measureWidth)
+      if (measureOffset === 0) {
+        ctx.setStrokeStyle('#111111')
+        ctx.setLineWidth(2)
+        ctx.beginPath()
+        ctx.moveTo(measureX, barTop)
+        ctx.lineTo(measureX, barBottom)
+        ctx.stroke()
+      }
+
+      drawNotationCanvasMeasure(ctx, measure, measureX, centerY, layout.measureWidth)
+
+      var barX = measureX + layout.measureWidth
+      ctx.setStrokeStyle('#111111')
+      ctx.setLineWidth(2)
+      ctx.beginPath()
+      ctx.moveTo(barX, barTop)
+      ctx.lineTo(barX, barBottom)
+      ctx.stroke()
+    }
+
+    setCanvasText(ctx, 96, 'center', 'middle')
+    ctx.fillText('}', width - 18, centerY + 2)
+  }
+}
+
+function getNotationExportScale(width, height) {
+  var scale = 2
+  var maxPixels = 32000000
+  while (scale > 1 && width * height * scale * scale > maxPixels) {
+    scale = scale - 0.25
+  }
+  return Math.max(1, scale)
+}
+
 // ===== Page =====
 Page({
   data: {
@@ -369,6 +587,8 @@ Page({
     showNotation: false,
     showCode: false,
     isPaused: false,
+    notationCanvasWidth: 804,
+    notationCanvasHeight: 500,
     // ZIP Dialog 状态
     showZipDialog: false,
     zipFileName: '',
@@ -836,7 +1056,7 @@ Page({
     var id = e.currentTarget.dataset.id
     var self = this
     wx.showActionSheet({
-      itemList: ['download code', 'delete'],
+      itemList: ['下载文件', '删除'],
       success: function(res) {
         if (res.tapIndex === 0) self._downloadSingle(id)
         if (res.tapIndex === 1) self._deleteProject(id)
@@ -906,55 +1126,14 @@ Page({
     var files = []
     for (var i = 0; i < list.length; i++) {
       var proj = list[i]
-      var fname = ''
-      var fileContent = ''
-      
-      if (!proj.sourceIsEncrypted) {
-        // 【未加密】原样导出，修改信息生效
-        try {
-          var songArr = JSON.parse(proj.content)
-          if (Array.isArray(songArr) && songArr[0]) {
-            songArr[0].name = proj.meta.name || songArr[0].name
-            songArr[0].author = proj.meta.author || songArr[0].author
-            songArr[0].bpm = proj.meta.bpm || songArr[0].bpm
-            songArr[0].transcribedBy = proj.meta.transcribedBy || songArr[0].transcribedBy
-            fileContent = JSON.stringify(songArr, null, 2)
-          } else { fileContent = proj.content }
-        } catch(e) { fileContent = proj.content }
-        fname = proj.fileName || 'project.txt'
-        if (!/\.txt$/i.test(fname)) fname = fname + '.txt'
-      } else {
-        // 【已加密】导出为可读 txt
-        var decrypted = proj.decryptedSourceContent || ''
-        if (!decrypted) {
-          try { decrypted = decryptContent(proj.content, null) } catch(e) { decrypted = proj.content }
-        }
-        try {
-          var songArr = JSON.parse(decrypted)
-          if (Array.isArray(songArr) && songArr[0]) {
-            var song = songArr[0], lines = []
-            lines.push('========================================')
-            lines.push('  Song: ' + (song.name || 'Unknown'))
-            lines.push('  Author: ' + (song.author || 'Unknown'))
-            lines.push('  BPM: ' + (song.bpm || 120))
-            lines.push('  TranscribedBy: ' + (song.transcribedBy || ''))
-            lines.push('========================================')
-            lines.push('')
-            var notes = song.songNotes || []
-            lines.push('Notes (' + notes.length + '):')
-            notes.forEach(function(n, idx) {
-              lines.push('  [' + idx + ']  time=' + n.time + '  key=' + n.key + '  duration=' + (n.duration || 0))
-            })
-            fileContent = lines.join('\n')
-          } else { fileContent = decrypted }
-        } catch(e) { fileContent = decrypted }
-        fname = (proj.meta.name || 'project') + '_decrypted.txt'
+      try {
+        files.push({
+          name: getSourceFileName(proj),
+          content: getSourceProjectContent(proj)
+        })
+      } catch(e) {
+        console.error('[!] 源文件生成失败:', proj.fileName, e.message)
       }
-
-      files.push({
-        name: fname,
-        content: fileContent
-      })
     }
     
     if (files.length === 0) {
@@ -1000,35 +1179,36 @@ Page({
     var list = this.data.projectFiles
     var proj = null
     for (var i = 0; i < list.length; i++) { if (list[i].id === id) { proj = list[i]; break } }
-    if (!proj || !proj.generatedCode) { wx.showToast({ title: '没有代码', icon: 'none' }); return }
-    var fname = (proj.meta.name || 'project') + '_code.txt'
+    if (!proj || !proj.meta || !proj.meta.valid) { wx.showToast({ title: '没有可下载的文件', icon: 'none' }); return }
+
+    var fileContent = ''
+    try {
+      fileContent = getSourceProjectContent(proj)
+    } catch(e) {
+      console.error('[!] 源文件生成失败:', e.message)
+      wx.showToast({ title: '文件生成失败', icon: 'none' })
+      return
+    }
+
+    var fname = getSourceFileName(proj)
     var fpath = wx.env.USER_DATA_PATH + '/' + fname
     var fs = wx.getFileSystemManager()
+    var self = this
     fs.writeFile({
-      filePath: fpath, data: proj.generatedCode, encoding: 'utf-8',
+      filePath: fpath, data: fileContent, encoding: 'utf-8',
       success: function() {
-        // 保存成功后，提供用户操作选项
-        wx.showActionSheet({
-          itemList: ['分享到聊天', '复制代码内容'],
+        self._saveProjects()
+        wx.showModal({
+          title: '文件已生成',
+          content: '小程序无法直接写入手机文件夹，请通过分享文件保存或转发这个 .txt 文件。',
+          confirmText: '分享保存',
+          cancelText: '取消',
           success: function(res) {
-            if (res.tapIndex === 0) {
-              // 分享到聊天
+            if (res.confirm) {
               wx.shareFileMessage({
                 filePath: fpath, fileName: fname,
                 success: function() { wx.showToast({ title: '已分享', icon: 'success' }) },
-                fail: function() { 
-                  // 分享失败，自动复制到剪贴板
-                  wx.setClipboardData({
-                    data: proj.generatedCode,
-                    success: function() { wx.showToast({ title: '分享失败，代码已复制', icon: 'none' }) }
-                  })
-                }
-              })
-            } else if (res.tapIndex === 1) {
-              // 复制代码内容
-              wx.setClipboardData({
-                data: proj.generatedCode,
-                success: function() { wx.showToast({ title: '代码已复制', icon: 'success' }) }
+                fail: function() { wx.showToast({ title: '分享失败，请重试', icon: 'none' }) }
               })
             }
           }
@@ -1036,6 +1216,11 @@ Page({
       },
       fail: function(){ wx.showToast({ title: '保存失败', icon: 'none' }) }
     })
+  },
+
+  onDownloadActiveSource: function() {
+    if (!this.data.activeProjectId) { wx.showToast({ title: '请先选择文件', icon: 'none' }); return }
+    this._downloadSingle(this.data.activeProjectId)
   },
 
   // ---- 代码操作 ----
@@ -1047,167 +1232,47 @@ Page({
 
   onDownloadCode: function() {
     var p = this.data.activeProject
-    if (!p || !p.generatedCode) { wx.showToast({ title: '没有代码', icon: 'none' }); return }
-    var fname = (p.meta.name || 'skystudio') + '_code.txt'
-    var fpath = wx.env.USER_DATA_PATH + '/' + fname
-    var fs = wx.getFileSystemManager()
-    var self = this
-    fs.writeFile({
-      filePath: fpath, data: p.generatedCode, encoding: 'utf-8',
-      success: function() {
-        wx.shareFileMessage({
-          filePath: fpath, fileName: fname,
-          success: function(){ wx.showToast({ title: '已分享', icon: 'success' }) },
-          fail: function() {
-            wx.showModal({ title: '已保存', content: '文件已保存到本地缓存', showCancel: false })
-          }
-        })
-      },
-      fail: function(){ wx.showToast({ title: '保存失败', icon: 'none' }) }
-    })
+    if (!p) { wx.showToast({ title: '请先选择文件', icon: 'none' }); return }
+    this._downloadSingle(p.id)
   },
 
   onExportImage: function() {
     var p = this.data.activeProject
     if (!p || !p.meta || !p.meta.valid) { wx.showToast({ title: '没有可导出的内容', icon: 'none' }); return }
     wx.showLoading({ title: '生成中...' })
-    var ctx = wx.createCanvasContext('notationCanvas')
-    var dark = this.data.isDarkMode
-    
-    // 画布尺寸
-    var canvasWidth = 375
-    var canvasHeight = 500
-    var left = 20, right = 20, top = 100, bottom = 40
-    var measureWidth = 80
-    var beatWidth = measureWidth / NOTATION_BEATS_PER_MEASURE
-    var lineHeight = 30
-    
-    // 背景
-    ctx.setFillStyle(dark ? '#1e1e1e' : '#ffffff')
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight)
-    
-    // 标题区域
-    ctx.setFontSize(16)
-    ctx.setFillStyle(dark ? '#e8edf4' : '#262626')
-    ctx.fillText('Song: ' + (p.meta.name || ''), 20, 30)
-    ctx.fillText('Author: ' + (p.meta.author || ''), 20, 55)
-    ctx.fillText('BPM: ' + (p.meta.bpm || 0), 20, 80)
-    
-    // 构建小节数据
-    var measures = []
-    if (p.notesData && p.notesData.length > 0) {
-      measures = buildNotationMeasures(p.notesData, p.meta.bpm || 120)
-    }
-    
-    // 计算总行数
-    var lineCount = Math.max(1, Math.ceil(measures.length / NOTATION_MEASURES_PER_LINE))
-    canvasHeight = top + (lineCount * lineHeight) + bottom
-    
-    // 重新绘制背景（高度可能变化）
-    ctx.setFillStyle(dark ? '#1e1e1e' : '#ffffff')
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight)
-    
-    // 重新绘制标题
-    ctx.setFontSize(16)
-    ctx.setFillStyle(dark ? '#e8edf4' : '#262626')
-    ctx.fillText('Song: ' + (p.meta.name || ''), 20, 30)
-    ctx.fillText('Author: ' + (p.meta.author || ''), 20, 55)
-    ctx.fillText('BPM: ' + (p.meta.bpm || 0), 20, 80)
-    
-    // 绘制简谱
-    ctx.setFontSize(14)
-    for (var lineStart = 0; lineStart < measures.length; lineStart += NOTATION_MEASURES_PER_LINE) {
-      var lineIndex = Math.floor(lineStart / NOTATION_MEASURES_PER_LINE)
-      var y = top + (lineIndex * lineHeight) + 20
-      
-      for (var measureOffset = 0; measureOffset < NOTATION_MEASURES_PER_LINE; measureOffset++) {
-        var measureIndex = lineStart + measureOffset
-        if (measureIndex >= measures.length) break
-        
-        var measure = measures[measureIndex]
-        var measureX = left + (measureOffset * measureWidth)
-        
-        // 绘制小节线
-        ctx.setStrokeStyle(dark ? '#e8edf4' : '#262626')
-        ctx.setLineWidth(1)
-        ctx.beginPath()
-        ctx.moveTo(measureX, y - 15)
-        ctx.lineTo(measureX, y + 5)
-        ctx.stroke()
-        
-        // 绘制拍子
-        for (var beatIndex = 0; beatIndex < NOTATION_BEATS_PER_MEASURE; beatIndex++) {
-          var beatX = measureX + (beatIndex * beatWidth) + 10
-          var events = measure[beatIndex]
-          
-          if (events.length === 0) {
-            // 空拍，绘制横线
-            ctx.setStrokeStyle(dark ? '#666666' : '#cccccc')
-            ctx.beginPath()
-            ctx.moveTo(beatX, y)
-            ctx.lineTo(beatX + beatWidth - 20, y)
-            ctx.stroke()
-          } else {
-            // 绘制音符
-            for (var e = 0; e < events.length; e++) {
-              var event = events[e]
-              var noteY = y - (e * 16)
-              
-              for (var n = 0; n < event.noteInfos.length; n++) {
-                var noteInfo = event.noteInfos[n]
-                var parts = getNumberedNotationParts(noteInfo.key)
-                var noteX = beatX + (n * 12)
-                
-                // 绘制数字
-                ctx.setFillStyle(dark ? '#e8edf4' : '#262626')
-                ctx.fillText(parts.digit, noteX, noteY)
-                
-                // 绘制高音/低音点
-                if (parts.dots > 0) {
-                  // 高音点（在上方）
-                  for (var d = 0; d < parts.dots; d++) {
-                    ctx.fillText('.', noteX + 8, noteY - 10 - (d * 6))
-                  }
-                } else if (parts.dots < 0) {
-                  // 低音点（在下方）
-                  for (var d = 0; d < -parts.dots; d++) {
-                    ctx.fillText('.', noteX + 8, noteY + 10 + (d * 6))
-                  }
-                }
+    var layout = getNotationImageLayout(p)
+    var scale = getNotationExportScale(layout.width, layout.height)
+
+    this.setData({
+      notationCanvasWidth: layout.width,
+      notationCanvasHeight: layout.height
+    }, function() {
+      var ctx = wx.createCanvasContext('notationCanvas')
+      drawNotationImage(ctx, p, layout)
+      ctx.draw(false, function() {
+        wx.canvasToTempFilePath({
+          canvasId: 'notationCanvas',
+          width: layout.width,
+          height: layout.height,
+          destWidth: Math.round(layout.width * scale),
+          destHeight: Math.round(layout.height * scale),
+          success: function(res) {
+            wx.hideLoading()
+            wx.saveImageToPhotosAlbum({
+              filePath: res.tempFilePath,
+              success: function(){ wx.showToast({ title: '已保存到相册', icon: 'success' }) },
+              fail: function() {
+                wx.shareFileMessage({
+                  filePath: res.tempFilePath,
+                  fileName: safeFileName(p.meta.name || 'notation', 'notation') + '_jianpu.png',
+                  success: function(){ wx.showToast({ title: '已分享', icon: 'success' }) },
+                  fail: function(){ wx.showToast({ title: '保存失败', icon: 'none' }) }
+                })
               }
-            }
-          }
-        }
-        
-        // 绘制小节结束线
-        ctx.setStrokeStyle(dark ? '#e8edf4' : '#262626')
-        ctx.beginPath()
-        ctx.moveTo(measureX + measureWidth - 1, y - 15)
-        ctx.lineTo(measureX + measureWidth - 1, y + 5)
-        ctx.stroke()
-      }
-    }
-    
-    var self = this
-    ctx.draw(false, function() {
-      wx.canvasToTempFilePath({
-        canvasId: 'notationCanvas',
-        success: function(res) {
-          wx.hideLoading()
-          wx.saveImageToPhotosAlbum({
-            filePath: res.tempFilePath,
-            success: function(){ wx.showToast({ title: '已保存到相册', icon: 'success' }) },
-            fail: function() {
-              wx.shareFileMessage({
-                filePath: res.tempFilePath,
-                fileName: (p.meta.name || 'notation') + '.png',
-                success: function(){ wx.showToast({ title: '已分享', icon: 'success' }) },
-                fail: function(){ wx.hideLoading(); wx.showToast({ title: '保存失败', icon: 'none' }) }
-              })
-            }
-          })
-        },
-        fail: function(){ wx.hideLoading(); wx.showToast({ title: '导出失败', icon: 'none' }) }
+            })
+          },
+          fail: function(){ wx.hideLoading(); wx.showToast({ title: '导出失败', icon: 'none' }) }
+        })
       })
     })
   },
@@ -1252,14 +1317,26 @@ Page({
     if (field === 'transcribedBy') meta.transcribedBy = val
     if (ap.notesData && ap.notesData.length > 0) {
       try {
-        var src  = ap.decryptedSourceContent || ap.content
-        var song = JSON.parse(src)[0]
-        song.name = meta.name; song.author = meta.author; song.bpm = meta.bpm; song.transcribedBy = meta.transcribedBy
-        var model = buildTimingModel(ap.notesData)
+        var src = ap.sourceIsEncrypted ? (ap.decryptedSourceContent || decryptContent(ap.content, null)) : ap.content
+        var updatedSource = updateProjectContentMeta(src, meta)
+        if (ap.sourceIsEncrypted) {
+          ap.decryptedSourceContent = updatedSource
+        } else {
+          ap.content = updatedSource
+        }
+
+        var normalized = normalizeKeyNames(updatedSource)
+        var song = JSON.parse(normalized)[0]
+        var notes = Array.isArray(song.songNotes) ? song.songNotes : ap.notesData
+        var model = buildTimingModel(notes)
         ap._timingModel = model
         ap._timingUnit  = model.unit
-        ap.generatedCode = buildCode(song, meta.paizi, model, model.unit)
+        ap.notesData = notes
+        ap.meta = parseMeta(normalized)
+        ap.generatedCode = buildCode(song, ap.meta.paizi, model, model.unit)
         ap.scriptCode   = '// Sky Studio auto-play script\n// Generated by Sky Studio Decrypt Tool\n\n' + ap.generatedCode
+        ap.bpm = song.bpm || 120
+        ap.paizi = ap.meta.paizi || '0/4'
         var list = this.data.projectFiles
         for (var i = 0; i < list.length; i++) { if (list[i].id === ap.id) { list[i] = ap; break } }
         this.setData({ activeProject: ap, projectFiles: list })

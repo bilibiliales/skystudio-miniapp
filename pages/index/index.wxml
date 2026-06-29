@@ -191,8 +191,8 @@
         <button class="weui-btn weui-btn_default action-btn" bindtap="onCopyCode">
           <image src="/images/copy.svg" class="action-icon adaptive-icon"/> 复制代码
         </button>
-        <button class="weui-btn weui-btn_default action-btn" bindtap="onBatchDownloadIndividual">
-          <image src="/images/zip.svg" class="action-icon adaptive-icon"/> 打包下载
+        <button class="weui-btn weui-btn_default action-btn" bindtap="onDownloadActiveSource">
+          <image src="/images/download.svg" class="action-icon adaptive-icon"/> 下载文件
         </button>
         <button class="weui-btn weui-btn_primary action-btn" bindtap="onExportImage">
           <image src="/images/image.svg" class="action-icon adaptive-icon"/> 导出图片
@@ -223,7 +223,7 @@
   <view class="safe-bottom"></view>
 
   <!--Canvas（隐藏）-->
-  <canvas canvas-id="notationCanvas" class="hidden-canvas"></canvas>
+  <canvas canvas-id="notationCanvas" class="hidden-canvas" style="width: {{notationCanvasWidth}}px; height: {{notationCanvasHeight}}px;"></canvas>
   
   <!-- 自定义Dialog：ZIP文件已生成 -->
   <view class="weui-mask" wx:if="{{showZipDialog}}" bindtap="onCloseZipDialog"></view>
