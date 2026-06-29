@@ -1,6 +1,91 @@
-// pages/index/index.js
+﻿// pages/index/index.js
+
 var app = getApp()
 var zipHelper = require('./zipHelper.js')
+
+// ===== 编码辅助函数 =====
+function utf8ArrayToString(bytes) {
+  var result = []
+  var i = 0
+  while (i < bytes.length) {
+    var b = bytes[i]
+    if (b <= 0x7F) { result.push(String.fromCharCode(b)); i++ }
+    else if ((b & 0xE0) === 0xC0) {
+      result.push(String.fromCharCode(((b & 0x1F) << 6) | (bytes[i+1] & 0x3F))); i += 2
+    } else if ((b & 0xF0) === 0xE0) {
+      result.push(String.fromCharCode(((b & 0x0F) << 12) | ((bytes[i+1] & 0x3F) << 6) | (bytes[i+2] & 0x3F))); i += 3
+    } else if ((b & 0xF8) === 0xF0) {
+      var code = ((b & 0x07) << 18) | ((bytes[i+1] & 0x3F) << 12) | ((bytes[i+2] & 0x3F) << 6) | (bytes[i+3] & 0x3F)
+      if (code > 0xFFFF) {
+        var hi = Math.floor((code - 0x10000) / 0x400) + 0xD800
+        var lo = ((code - 0x10000) % 0x400) + 0xDC00
+        result.push(String.fromCharCode(hi, lo))
+      } else { result.push(String.fromCharCode(code)) }
+      i += 4
+    } else { result.push(String.fromCharCode(b)); i++ }
+  }
+  return result.join('')
+}
+function isLikelyGBK(bytes) {
+  var gbkLike = 0, total = 0
+  for (var i = 0; i < bytes.length - 1; i += Math.max(1, Math.floor(bytes.length / 300))) {
+    var b1 = bytes[i], b2 = bytes[i+1]
+    if (b1 >= 0x81 && b1 <= 0xFE && b2 >= 0x40 && b2 !== 0x7F && b2 <= 0xFE) gbkLike++
+    total++
+    if (total > 300) break
+  }
+  return total > 0 && (gbkLike / total) > 0.25
+}
+function gbkArrayToString(bytes) {
+  // 纯JS实现GBK解码（不依赖TextDecoder）
+  // GBK双字节范围：0x81-0xFE + 0x40-0xFE（排除0x7F）
+  var result = []
+  for (var i = 0; i < bytes.length; i++) {
+    var b1 = bytes[i]
+    if (b1 < 0x80) {
+      // ASCII单字节
+      result.push(String.fromCharCode(b1))
+    } else if (b1 >= 0x81 && b1 <= 0xFE && i + 1 < bytes.length) {
+      var b2 = bytes[i + 1]
+      if (b2 >= 0x40 && b2 !== 0x7F && b2 <= 0xFE) {
+        // GBK双字节：查表或近似映射
+        // 先用常见GBK->Unicode近似映射（覆盖大部分中文）
+        var code = gbkToUnicode(b1, b2)
+        if (code) {
+          if (code > 0xFFFF) {
+            var hi = Math.floor((code - 0x10000) / 0x400) + 0xD800
+            var lo = ((code - 0x10000) % 0x400) + 0xDC00
+            result.push(String.fromCharCode(hi, lo))
+          } else {
+            result.push(String.fromCharCode(code))
+          }
+        } else {
+          // 查不到就保留原始字节
+          result.push(String.fromCharCode(b1, b2))
+        }
+        i++
+      } else {
+        result.push(String.fromCharCode(b1))
+      }
+    } else {
+      result.push(String.fromCharCode(b1))
+    }
+  }
+  return result.join('')
+}
+
+// 常见GBK字符→Unicode近似映射（覆盖大部分中文）
+function gbkToUnicode(b1, b2) {
+  // GBK的汉字区：0xB0A1-0xF7FE 对应 Unicode 0x4E00-0x9FA5
+  // 简化映射：用code page 936近似算法
+  if (b1 >= 0xB0 && b1 <= 0xF7) {
+    var offset = (b1 - 0xB0) * 94 + (b2 - 0xA1)
+    if (offset >= 0) return 0x4E00 + offset  // 近似对应常用汉字
+  }
+  // ASCII可打印字符
+  if (b1 === 0xA3 && b2 >= 0xA1 && b2 <= 0xFE) return 0xFF01 + (b2 - 0xA1)  // 全角字符
+  return null  // 让调用方决定如何处理
+}
 
 // ===== 解密算法 =====
 var ENC_RAGUS = [0x0E,0x18,0x76,0x08,0x7C,0x0B,0x27,0x77,0x0F,0x16,0x1C,0x02,0x1C,0x6D,0x67,0x21,0x34,0x0F,0x6D,0x2C,0x65,0x3C,0x23,0x79,0x11,0x32,0x28,0x63,0x17,0x32,0x2F,0x2F]
@@ -232,6 +317,7 @@ function parseMeta(content) {
     var s = arr[0]
     if (!s || typeof s !== 'object') return { valid: false, error: 'not object' }
     if (!Array.isArray(s.songNotes)) return { valid: false, error: 'no songNotes' }
+    console.log("内容：" + content);
     return {
       valid: true,
       name: s.name || 'unknown',
@@ -243,7 +329,7 @@ function parseMeta(content) {
       isEncrypted: !!s.isEncrypted,
       noteCount: s.songNotes.length
     }
-  } catch (e) { return { valid: false, error: e.message } }
+  } catch (e) { console.log("错误：" + e.message + "内容：" + content); return { valid: false, error: e.message } }
 }
 
 // ===== 生成代码 =====
@@ -486,58 +572,166 @@ Page({
     } catch(e) { console.error('save fail', e) }
   },
 
+  // ---- 文件选择 ----
   onChooseFile: function() {
     var self = this
-    wx.chooseMessageFile({
-      count: 10, type: 'file', extension: ['txt'],
+    wx.showActionSheet({
+      itemList: ['从聊天选择'],
       success: function(res) {
-        res.tempFiles.forEach(function(f){ self._readFile(f) })
-        self.setData({ showSidebar: false })
-      },
-      fail: function(err) {
-        if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) return
-        wx.showToast({ title: '选择文件失败', icon: 'none' })
+        if (res.tapIndex === 0) {
+          // 从聊天选择（wx.chooseMessageFile）
+          wx.chooseMessageFile({
+            count: 10, type: 'file', extension: ['txt'],
+            success: function(r) {
+              r.tempFiles.forEach(function(f){ self._readFile(f) })
+              self.setData({ showSidebar: false })
+            },
+            fail: function(err) {
+              if (err.errMsg && err.errMsg.indexOf('cancel') !== -1) return
+              wx.showToast({ title: '选择文件失败', icon: 'none' })
+            }
+          })
+        } else if (res.tapIndex === 1) {
+          wx.showToast({ title: '当前版本不支持', icon: 'none' })
+        }
       }
     })
   },
 
+  // 纯 JS 实现 UTF-16 LE 解码器
+  _decodeUTF16LE: function(uint8Array) {
+    var str = '';
+    // UTF-16LE 每两个字节代表一个字符
+    for (var i = 0; i < uint8Array.length - 1; i += 2) {
+      var codePoint = uint8Array[i] | (uint8Array[i + 1] << 8);
+      // 处理代理对 (Surrogate Pairs)，支持 Emoji 等扩展字符
+      if (codePoint >= 0xD800 && codePoint <= 0xDBFF && i + 3 < uint8Array.length) {
+        var low = uint8Array[i + 2] | (uint8Array[i + 3] << 8);
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          var fullCode = ((codePoint - 0xD800) << 10) + (low - 0xDC00) + 0x10000;
+          str += String.fromCodePoint(fullCode);
+          i += 2; // 额外跳过两个字节
+          continue;
+        }
+      }
+      str += String.fromCharCode(codePoint);
+    }
+    return str;
+  },
+
+  // 纯 JS 实现 UTF-8 解码器（作为 TextDecoder 的兜底）
+  _decodeUTF8: function(uint8Array) {
+    var str = '';
+    var i = 0;
+    while (i < uint8Array.length) {
+      var byte1 = uint8Array[i];
+      if (byte1 < 0x80) {
+        str += String.fromCharCode(byte1);
+        i += 1;
+      } else if (byte1 < 0xE0) {
+        str += String.fromCharCode(((byte1 & 0x1F) << 6) | (uint8Array[i+1] & 0x3F));
+        i += 2;
+      } else if (byte1 < 0xF0) {
+        str += String.fromCharCode(((byte1 & 0x0F) << 12) | ((uint8Array[i+1] & 0x3F) << 6) | (uint8Array[i+2] & 0x3F));
+        i += 3;
+      } else {
+        var codePoint = ((byte1 & 0x07) << 18) | ((uint8Array[i+1] & 0x3F) << 12) | ((uint8Array[i+2] & 0x3F) << 6) | (uint8Array[i+3] & 0x3F);
+        codePoint -= 0x10000;
+        str += String.fromCharCode((codePoint >> 10) + 0xD800, (codePoint & 0x3FF) + 0xDC00);
+        i += 4;
+      }
+    }
+    return str;
+  },
+
+  // 读取文件（自动检测编码）
   _readFile: function(file) {
     var self = this
     var fs = wx.getFileSystemManager()
+    // 以 ArrayBuffer 方式读取，在回调里同步解码
     fs.readFile({
-      filePath: file.path, encoding: 'utf-8',
+      filePath: file.path,
       success: function(res) {
-        var content = res.data
-        var meta = parseMeta(content)
-        if (!meta.valid) {
-          var inv = {
+        var bytes = new Uint8Array(res.data)
+        var content = ''
+
+        // 0. 纯 JS 实现 UTF-16 LE 解码，完美避开 TextDecoder 兼容性问题
+        if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+          content = self._decodeUTF16LE(bytes.slice(2)); // 必须 slice(2) 去掉 BOM 头
+        } 
+        // 1. 优先且严格处理 UTF-8 BOM
+        else if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+          content = self._decodeUTF8(bytes.slice(3));
+        } else {
+          // 2. 尝试使用 TextDecoder 自动检测
+          var decoded = false;
+          if (typeof TextDecoder !== 'undefined') {
+            try {
+              // 优先尝试 utf-8
+              var decoder = new TextDecoder('utf-8', { fatal: true });
+              content = decoder.decode(bytes);
+              decoded = true;
+            } catch(e) {
+              try {
+                // 如果 utf-8 失败，尝试 gbk
+                var decoder = new TextDecoder('gbk', { fatal: true });
+                content = decoder.decode(bytes);
+                decoded = true;
+              } catch(e2) {
+                // 若均失败，降级处理
+              }
+            }
+          }
+          
+          // 3. 降级方案：启发式判断
+          if (!decoded) {
+            if (typeof isLikelyGBK === 'function' && isLikelyGBK(bytes)) {
+              content = gbkArrayToString(bytes);
+            } else {
+              content = utf8ArrayToString(bytes);
+            }
+          }
+        }
+
+        content = content.replace(/^\uFEFF/, '').trim(); 
+
+        // 安全地进行 JSON 解析
+        try {
+          // 解码完成，进入原有逻辑
+          var meta = parseMeta(content)
+          if (!meta.valid) {
+            var inv = {
+              id: Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),
+              fileName: file.name, content: content, selected: true, meta: meta,
+              sourceIsEncrypted: false, createdAt: Date.now(),
+              decryptedSourceContent: null, generatedCode: '', scriptCode: '',
+              notesData: null, bpm: 120, paizi: '0/4', _timingModel: null, _timingUnit: 1
+            }
+            var list = self.data.projectFiles; list.push(inv)
+            self.setData({
+              projectFiles: list,
+              selectedCount: list.filter(function(x){return x.selected}).length,
+              allSelected: list.length>0 && list.every(function(x){return x.selected})
+            })
+            self._saveProjects()
+            return
+          }
+          var proj = {
             id: Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),
             fileName: file.name, content: content, selected: true, meta: meta,
-            sourceIsEncrypted: false, createdAt: Date.now(),
+            sourceIsEncrypted: meta.isEncrypted, createdAt: Date.now(),
             decryptedSourceContent: null, generatedCode: '', scriptCode: '',
-            notesData: null, bpm: 120, paizi: '0/4', _timingModel: null, _timingUnit: 1
+            notesData: null, bpm: meta.bpm||120, paizi: meta.paizi||'0/4',
+            _timingModel: null, _timingUnit: 1
           }
-          var list = self.data.projectFiles; list.push(inv)
-          self.setData({
-            projectFiles: list,
-            selectedCount: list.filter(function(x){return x.selected}).length,
-            allSelected: list.length>0 && list.every(function(x){return x.selected})
-          })
-          self._saveProjects()
-          return
-        }
-        var proj = {
-          id: Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),
-          fileName: file.name, content: content, selected: true, meta: meta,
-          sourceIsEncrypted: meta.isEncrypted, createdAt: Date.now(),
-          decryptedSourceContent: null, generatedCode: '', scriptCode: '',
-          notesData: null, bpm: meta.bpm||120, paizi: meta.paizi||'0/4',
-          _timingModel: null, _timingUnit: 1
-        }
-        if (!meta.isEncrypted) {
-          self._convertProject(proj)
-        } else {
-          self._decryptProject(proj)
+          if (!meta.isEncrypted) {
+            self._convertProject(proj)
+          } else {
+            self._decryptProject(proj)
+          }
+        } catch (e) {
+          console.error('JSON 解析失败，原始内容前100个字符:', content.slice(0, 100));
+          wx.showToast({ title: '文件格式不正确', icon: 'none' });
         }
       },
       fail: function() { wx.showToast({ title: '读取文件失败', icon: 'none' }) }
@@ -712,29 +906,54 @@ Page({
     var files = []
     for (var i = 0; i < list.length; i++) {
       var proj = list[i]
-      var fname = (proj.meta.name || 'project') + '_decrypted.json'
+      var fname = ''
+      var fileContent = ''
       
-      // 获取未加密的源内容
-      var sourceContent = ''
-      if (proj.sourceIsEncrypted === false && proj.decryptedSourceContent) {
-        sourceContent = proj.decryptedSourceContent
-      } else if (proj.sourceIsEncrypted === false && proj.content) {
-        sourceContent = proj.content
-      } else if (proj.decryptedSourceContent) {
-        sourceContent = proj.decryptedSourceContent
-      } else {
-        // 如果没有解密后的内容，尝试重新解密
+      if (!proj.sourceIsEncrypted) {
+        // 【未加密】原样导出，修改信息生效
         try {
-          sourceContent = decryptContent(proj.content, null)
-        } catch(e) {
-          console.error('解密失败:', proj.fileName, e)
-          continue
+          var songArr = JSON.parse(proj.content)
+          if (Array.isArray(songArr) && songArr[0]) {
+            songArr[0].name = proj.meta.name || songArr[0].name
+            songArr[0].author = proj.meta.author || songArr[0].author
+            songArr[0].bpm = proj.meta.bpm || songArr[0].bpm
+            songArr[0].transcribedBy = proj.meta.transcribedBy || songArr[0].transcribedBy
+            fileContent = JSON.stringify(songArr, null, 2)
+          } else { fileContent = proj.content }
+        } catch(e) { fileContent = proj.content }
+        fname = proj.fileName || 'project.txt'
+        if (!/\.txt$/i.test(fname)) fname = fname + '.txt'
+      } else {
+        // 【已加密】导出为可读 txt
+        var decrypted = proj.decryptedSourceContent || ''
+        if (!decrypted) {
+          try { decrypted = decryptContent(proj.content, null) } catch(e) { decrypted = proj.content }
         }
+        try {
+          var songArr = JSON.parse(decrypted)
+          if (Array.isArray(songArr) && songArr[0]) {
+            var song = songArr[0], lines = []
+            lines.push('========================================')
+            lines.push('  Song: ' + (song.name || 'Unknown'))
+            lines.push('  Author: ' + (song.author || 'Unknown'))
+            lines.push('  BPM: ' + (song.bpm || 120))
+            lines.push('  TranscribedBy: ' + (song.transcribedBy || ''))
+            lines.push('========================================')
+            lines.push('')
+            var notes = song.songNotes || []
+            lines.push('Notes (' + notes.length + '):')
+            notes.forEach(function(n, idx) {
+              lines.push('  [' + idx + ']  time=' + n.time + '  key=' + n.key + '  duration=' + (n.duration || 0))
+            })
+            fileContent = lines.join('\n')
+          } else { fileContent = decrypted }
+        } catch(e) { fileContent = decrypted }
+        fname = (proj.meta.name || 'project') + '_decrypted.txt'
       }
-      
+
       files.push({
         name: fname,
-        content: sourceContent
+        content: fileContent
       })
     }
     
@@ -750,7 +969,7 @@ Page({
 
     
     // 保存到本地
-    var fname = 'skystudio_decrypted.zip'
+    var fname = 'skystudio_projects.zip'
     var fpath = wx.env.USER_DATA_PATH + '/' + fname
     var fs = wx.getFileSystemManager()
     var self = this
@@ -775,7 +994,7 @@ Page({
         wx.showToast({ title: '保存失败', icon: 'none' })
       }
     })
-  },       // <-- 这里是关键！onBatchDownloadIndividual 函数结束
+  },
 
   _downloadSingle: function(id) {
     var list = this.data.projectFiles
@@ -1062,6 +1281,20 @@ Page({
     var fpath = this.data.zipFilePath
     var fname = this.data.zipFileName
     var self = this
+
+    // 检测是否在模拟器环境（模拟器不支持大文件分享）
+    var isDevTool = typeof __wxConfig !== 'undefined'
+
+    if (isDevTool) {
+      wx.showModal({
+        title: '提示',
+        content: '模拟器不支持分享大文件，请在真机上测试。',
+        showCancel: false
+      })
+      return
+    }
+
+    // 真机环境
     
     // 先关闭Dialog，再分享（避免遮挡）
     self.setData({ showZipDialog: false })
@@ -1081,3 +1314,4 @@ Page({
     })
   }
 })
+

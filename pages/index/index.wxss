@@ -610,8 +610,9 @@
   padding: 60px 24px;
   min-height: 50vh;
 }
-.error-icon {
-  font-size: 56px;
+.error-icon-svg {
+  width: 64px;
+  height: 64px;
   margin-bottom: 16px;
 }
 .error-title {

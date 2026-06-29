@@ -212,7 +212,7 @@
 
     <!--错误界面-->
     <view class="error-page" wx:else>
-      <text class="error-icon">❌</text>
+      <image src="/images/warn.svg" class="error-icon-svg"/>
       <text class="error-title">文件识别失败</text>
       <text class="error-desc">{{activeProject.meta.error}}</text>
     </view>
